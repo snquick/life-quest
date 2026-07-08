@@ -4,6 +4,7 @@
  * completion row can never disagree.
  */
 import { POINTS_MAX, POINTS_MIN } from '../constants';
+import type { CuratedQuest } from '../curated-habits';
 import type { DbClient, Habit } from './schema';
 
 /** Shape of a habits row joined with its completion flag. */
@@ -96,6 +97,41 @@ export async function listHabits(
  */
 export async function deleteHabit(db: DbClient, habitId: number): Promise<void> {
   await db.runAsync('DELETE FROM habits WHERE id = ?', [habitId]);
+}
+
+/**
+ * Pin a quest from the curated catalog: copy it into the habit list with
+ * its preset name, points, and curated key. The UNIQUE constraint on
+ * curated_key makes a duplicate pin a friendly no-op.
+ *
+ * @returns True when the quest was pinned; false when it already was.
+ * @throws {Error} On SQL failure.
+ */
+export async function pinQuest(db: DbClient, quest: CuratedQuest): Promise<boolean> {
+  const result = await db.runAsync(
+    'INSERT OR IGNORE INTO habits (name, points, curated_key) VALUES (?, ?, ?)',
+    [quest.name, clampPoints(quest.points), quest.curatedKey],
+  );
+  return result.changes === 1;
+}
+
+/**
+ * Unpin a quest: delete the habit carrying its curated key, along with its
+ * completions (cascade). Unpinning a quest that is not pinned is a no-op.
+ */
+export async function unpinQuest(db: DbClient, curatedKey: string): Promise<void> {
+  await db.runAsync('DELETE FROM habits WHERE curated_key = ?', [curatedKey]);
+}
+
+/**
+ * The curated keys currently pinned, sorted. Pinned state lives only in
+ * the habits rows, so this is the single source of truth for the catalog UI.
+ */
+export async function listPinnedKeys(db: DbClient): Promise<string[]> {
+  const rows = await db.getAllAsync<{ curated_key: string }>(
+    'SELECT curated_key FROM habits WHERE curated_key IS NOT NULL ORDER BY curated_key',
+  );
+  return rows.map((row) => row.curated_key);
 }
 
 /**

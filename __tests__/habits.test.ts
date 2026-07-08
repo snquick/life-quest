@@ -1,5 +1,14 @@
 import { POINTS_MAX, POINTS_MIN } from '../lib/constants';
-import { completeHabit, createHabit, deleteHabit, listHabits } from '../lib/db/habits';
+import type { CuratedQuest } from '../lib/curated-habits';
+import {
+  completeHabit,
+  createHabit,
+  deleteHabit,
+  listHabits,
+  listPinnedKeys,
+  pinQuest,
+  unpinQuest,
+} from '../lib/db/habits';
 import { getPlayer } from '../lib/db/player';
 import { migrateDbIfNeeded } from '../lib/db/schema';
 import { createTestDb, type TestDb } from '../test-utils/db';
@@ -86,6 +95,57 @@ describe('habits data layer', () => {
 
     it('rejects completing a habit that does not exist', async () => {
       await expect(completeHabit(db, 999, TODAY)).rejects.toThrow();
+    });
+  });
+
+  describe('pinning', () => {
+    const DISHES: CuratedQuest = { curatedKey: 'chores.dishes', name: 'Do the dishes', points: 10 };
+
+    it('pin copies the quest into the habit list', async () => {
+      await expect(pinQuest(db, DISHES)).resolves.toBe(true);
+      const habits = await listHabits(db, TODAY);
+      expect(habits).toHaveLength(1);
+      expect(habits[0]).toMatchObject({
+        name: 'Do the dishes',
+        points: 10,
+        curatedKey: 'chores.dishes',
+      });
+      expect(await listPinnedKeys(db)).toEqual(['chores.dishes']);
+    });
+
+    it('pinning the same quest twice is a no-op', async () => {
+      await pinQuest(db, DISHES);
+      await expect(pinQuest(db, DISHES)).resolves.toBe(false);
+      expect(await listHabits(db, TODAY)).toHaveLength(1);
+    });
+
+    it('completing a pinned quest credits its preset points', async () => {
+      await pinQuest(db, DISHES);
+      const [habit] = await listHabits(db, TODAY);
+      await expect(completeHabit(db, habit.id, TODAY)).resolves.toBe(true);
+      expect((await getPlayer(db)).currency).toBe(10);
+    });
+
+    it('unpin removes the habit for the key', async () => {
+      await pinQuest(db, DISHES);
+      await unpinQuest(db, 'chores.dishes');
+      expect(await listHabits(db, TODAY)).toEqual([]);
+      expect(await listPinnedKeys(db)).toEqual([]);
+    });
+
+    it('deleting the pinned habit also unpins it', async () => {
+      await pinQuest(db, DISHES);
+      const [habit] = await listHabits(db, TODAY);
+      await deleteHabit(db, habit.id);
+      expect(await listPinnedKeys(db)).toEqual([]);
+    });
+
+    it('does not restrict custom habits alongside pins', async () => {
+      await pinQuest(db, DISHES);
+      await createHabit(db, 'Custom 1', 5);
+      await createHabit(db, 'Custom 2', 5);
+      expect(await listHabits(db, TODAY)).toHaveLength(3);
+      expect(await listPinnedKeys(db)).toEqual(['chores.dishes']);
     });
   });
 
